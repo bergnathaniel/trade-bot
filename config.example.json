@@ -1,0 +1,28 @@
+{
+  "symbol": "BTCUSDT",
+  "interval": "1h",
+  "source": "binance",
+
+  "fast_period": 20,
+  "slow_period": 50,
+  "rsi_period": 14,
+  "rsi_max_entry": 70.0,
+  "atr_period": 14,
+  "atr_stop_mult": 2.5,
+  "take_profit_mult": 0.0,
+
+  "starting_cash": 1000.0,
+  "risk_fraction": 0.25,
+  "fee_rate": 0.001,
+  "slippage_rate": 0.0005,
+
+  "live": false,
+  "poll_seconds": 60,
+  "lookback": 500,
+
+  "state_dir": "./state",
+  "dashboard_port": 8000,
+  "dashboard_token": "",
+  "telegram_token": "",
+  "telegram_chat_id": ""
+}
