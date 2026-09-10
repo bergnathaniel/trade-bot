@@ -28,6 +28,35 @@ python3 -m tradebot --config config.json serve --host 127.0.0.1
 Then open `http://<host>:8000/?token=<your token>` on your phone. Reach it over
 Tailscale or an SSH tunnel — the server speaks plain HTTP and has no TLS.
 
+## Watching it from an iPhone
+
+iOS has no Termux, so the bot runs on an always-on Linux box (VPS, Raspberry
+Pi, spare laptop) and the phone is just the screen:
+
+```bash
+sudo bash deploy/setup.sh          # clone to /opt/trade-bot, generate a token,
+                                   # install and start the systemd service
+```
+
+Install [Tailscale](https://tailscale.com) on that box and on the phone, then
+open `http://<tailscale-name>:8000/?token=<token>` in Safari and use
+**Share → Add to Home Screen**. The page ships the iOS web-app meta tags, so it
+opens full-screen with no browser chrome and the token stays in the saved URL.
+
+Do not port-forward 8000 to the open internet: no TLS, and the token is the
+only thing in front of it.
+
+Prefer no dashboard at all? Set `TRADEBOT_TELEGRAM_TOKEN` and
+`TRADEBOT_TELEGRAM_CHAT_ID` in `/etc/tradebot.env` and every simulated fill
+arrives as a push notification — nothing to check.
+
+Useful once it is running:
+
+```bash
+systemctl status tradebot          # is it alive
+journalctl -u tradebot -f          # what it is deciding, live
+```
+
 ## Commands
 
 | command | what it does |
@@ -91,14 +120,21 @@ account rather than crashing the bot.
 python3 -m unittest discover -s tests -v
 ```
 
-32 tests cover the indicators, the paper account's fee/slippage arithmetic,
+45 tests cover the indicators, the paper account's fee/slippage arithmetic,
 entry and exit conditions, backtest invariants (final equity equals starting
 cash plus realised PnL), state persistence and corruption recovery, and the
-dashboard's token check.
+dashboard's token check, plus data-source
+fallback, Coinbase row remapping and symbol mapping.
 
-## Note on the live feed
+## Market data
 
-Candles come from Binance's public REST endpoint, which needs no API key. Some
-networks and regions get an HTTP 451 from it — including the sandbox this was
-built in. If that happens, fetch a CSV elsewhere and use `source: "csv"`; the
-CSV path is exercised by the test suite and by `backtest --csv`.
+No API keys anywhere. `source: "auto"` (the default) tries `binance`, then
+`binance_us`, then `coinbase`, and keeps the first that answers — binance.com
+returns HTTP 451 to US addresses, so US networks land on Binance.US or
+Coinbase automatically. Pin one with `source`, or set `source: "csv"` with a
+`csv_path` to run entirely offline.
+
+Symbols are written Binance-style (`BTCUSDT`, `ETHUSDT`) and mapped to
+Coinbase product ids as needed (`BTC-USD`); USDT and USDC both map to USD.
+Coinbase supports 1m/5m/15m/1h/6h/1d intervals and about 300 candles per
+request.

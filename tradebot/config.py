@@ -15,7 +15,7 @@ class Config:
     # market
     symbol: str = "BTCUSDT"
     interval: str = "1h"
-    source: str = "binance"          # "binance" or "csv"
+    source: str = "auto"             # auto | binance | binance_us | coinbase | csv
     csv_path: str = ""               # used when source == "csv"
 
     # strategy

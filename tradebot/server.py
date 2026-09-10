@@ -21,13 +21,20 @@ log = logging.getLogger(__name__)
 
 PAGE = """<!doctype html>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>trade-bot</title>
+<!-- Add to Home Screen on iOS: standalone window, no Safari chrome. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="trade-bot">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0f1115">
 <style>
  :root{color-scheme:light dark;--bg:#0f1115;--card:#181b22;--fg:#e8eaed;--dim:#9aa0aa;--up:#35c07d;--down:#e2604f}
  @media (prefers-color-scheme:light){:root{--bg:#f4f5f7;--card:#fff;--fg:#15171c;--dim:#666e7a}}
  *{box-sizing:border-box}
- body{margin:0;padding:16px;background:var(--bg);color:var(--fg);
+ body{margin:0;background:var(--bg);color:var(--fg);
+      padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right))
+              max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));
       font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
  h1{font-size:17px;margin:0 0 12px;display:flex;justify-content:space-between;align-items:baseline}
  h1 small{color:var(--dim);font-weight:400;font-size:12px}

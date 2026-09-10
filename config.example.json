@@ -1,7 +1,7 @@
 {
   "symbol": "BTCUSDT",
   "interval": "1h",
-  "source": "binance",
+  "source": "auto",
 
   "fast_period": 20,
   "slow_period": 50,

@@ -14,58 +14,64 @@ from .engine import Engine
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="tradebot", description=__doc__)
-    parser.add_argument("--config", help="path to a JSON config file")
-    parser.add_argument("--symbol")
-    parser.add_argument("--interval")
-    parser.add_argument("--verbose", "-v", action="store_true")
+    # Shared options are accepted on either side of the subcommand, so both
+    # `tradebot --symbol X backtest` and `tradebot backtest --symbol X` work.
+    common = argparse.ArgumentParser(add_help=False, argument_default=argparse.SUPPRESS)
+    common.add_argument("--config", help="path to a JSON config file")
+    common.add_argument("--symbol", help="e.g. BTCUSDT")
+    common.add_argument("--interval", help="e.g. 1h")
+    common.add_argument("--source", help="auto | binance | binance_us | coinbase | csv")
+    common.add_argument("--verbose", "-v", action="store_true")
+
+    parser = argparse.ArgumentParser(prog="tradebot", description=__doc__, parents=[common])
     sub = parser.add_subparsers(dest="command", required=True)
 
-    bt = sub.add_parser("backtest", help="score the strategy over historical candles")
+    bt = sub.add_parser("backtest", parents=[common],
+                        help="score the strategy over historical candles")
     bt.add_argument("--csv", help="candles CSV instead of the live feed")
     bt.add_argument("--synthetic", type=int, metavar="N", help="use N generated candles (offline demo)")
     bt.add_argument("--json", action="store_true", help="emit machine-readable output")
 
-    sub.add_parser("run", help="paper-trade in a loop, printing to stdout")
+    sub.add_parser("run", parents=[common], help="paper-trade in a loop, printing to stdout")
 
-    srv = sub.add_parser("serve", help="paper-trade and serve the phone dashboard")
+    srv = sub.add_parser("serve", parents=[common],
+                         help="paper-trade and serve the phone dashboard")
     srv.add_argument("--host", default="127.0.0.1")
     srv.add_argument("--port", type=int)
 
-    fetch = sub.add_parser("fetch", help="download candles to a CSV")
+    fetch = sub.add_parser("fetch", parents=[common], help="download candles to a CSV")
     fetch.add_argument("out")
     fetch.add_argument("--limit", type=int, default=1000)
 
-    sub.add_parser("show", help="print the effective configuration")
+    sub.add_parser("show", parents=[common], help="print the effective configuration")
     return parser
 
 
 def apply_overrides(cfg: Config, args: argparse.Namespace) -> Config:
-    if args.symbol:
-        cfg.symbol = args.symbol
-    if args.interval:
-        cfg.interval = args.interval
-    if getattr(args, "port", None):
-        cfg.dashboard_port = args.port
+    for name, field in (("symbol", "symbol"), ("interval", "interval"),
+                        ("source", "source"), ("port", "dashboard_port")):
+        value = getattr(args, name, None)
+        if value:
+            setattr(cfg, field, value)
     return cfg
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
+        level=logging.DEBUG if getattr(args, "verbose", False) else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s",
     )
-    cfg = apply_overrides(Config.load(args.config), args)
+    cfg = apply_overrides(Config.load(getattr(args, "config", None)), args)
 
     if args.command == "show":
         print(cfg.to_json())
         return 0
 
     if args.command == "backtest":
-        if args.synthetic:
+        if getattr(args, "synthetic", None):
             candles = synthetic(args.synthetic)
-        elif args.csv:
+        elif getattr(args, "csv", None):
             candles = read_csv(args.csv)
         else:
             candles = load_candles(cfg.source, cfg.symbol, cfg.interval, cfg.lookback, cfg.csv_path)

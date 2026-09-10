@@ -1,0 +1,26 @@
+# Always-on paper trading + dashboard.
+#   sudo cp deploy/tradebot.service /etc/systemd/system/
+#   sudo systemctl enable --now tradebot
+[Unit]
+Description=trade-bot (paper trading dashboard)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/opt/trade-bot
+# Secrets live here, not in the committed config:
+#   TRADEBOT_DASHBOARD_TOKEN=..., TRADEBOT_TELEGRAM_TOKEN=..., TRADEBOT_TELEGRAM_CHAT_ID=...
+EnvironmentFile=-/etc/tradebot.env
+ExecStart=/usr/bin/python3 -m tradebot --config /opt/trade-bot/config.json serve --host 0.0.0.0
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/trade-bot/state
+
+[Install]
+WantedBy=multi-user.target
