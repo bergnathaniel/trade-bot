@@ -34,9 +34,22 @@ class Config:
     slippage_rate: float = 0.0005
 
     # execution
-    live: bool = False               # False = paper trading (the only mode implemented)
+    live: bool = False               # True = real swaps with real funds, read the README first
+    dry_run: bool = True             # live mode still stops short of broadcasting
     poll_seconds: int = 60
     lookback: int = 500
+
+    # live trading (Solana / Jupiter). Ignored unless live is true.
+    rpc_url: str = "https://api.mainnet-beta.solana.com"
+    wallet_key_env: str = "TRADEBOT_WALLET_KEY"
+    max_trade_usd: float = 25.0
+    daily_loss_limit_usd: float = 50.0
+    max_trades_per_day: int = 6
+    max_slippage_bps: int = 100
+    max_price_impact_pct: float = 1.0
+    min_sol_reserve: float = 0.02
+    priority_fee_lamports: int = 100_000
+    confirm_timeout: float = 90.0
 
     # ops
     state_dir: str = str(DEFAULT_STATE_DIR)

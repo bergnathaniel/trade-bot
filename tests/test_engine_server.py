@@ -1,15 +1,19 @@
 import json
+import os
 import tempfile
 import unittest
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
+from unittest import mock
 
 from tradebot.config import Config
 from tradebot.data import synthetic, write_csv
 from tradebot.engine import Engine
 from tradebot.notify import Notifier
+from tradebot.solana import base58, jupiter
+from tradebot.solana.keypair import KeyError_, Keypair
 from tradebot.server import make_handler
 
 
@@ -34,9 +38,33 @@ class TestEngine(unittest.TestCase):
             starting_cash=1000.0, symbol="TEST", interval="1h",
         )
 
-    def test_live_mode_is_refused(self):
-        with self.assertRaises(NotImplementedError):
-            Engine(Config(live=True, state_dir=self.tmp.name))
+    def test_live_mode_without_a_key_is_refused(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(KeyError_):
+                Engine(Config(live=True, state_dir=self.tmp.name))
+
+    def test_live_mode_without_confirmation_is_refused(self):
+        keypair = Keypair(bytes(range(32)))
+        env = {"TRADEBOT_WALLET_KEY": base58.encode(bytes(range(32)))}
+        with mock.patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(PermissionError):
+                Engine(Config(live=True, symbol="SOLUSDC", state_dir=self.tmp.name))
+        env["TRADEBOT_LIVE_CONFIRM"] = "SomeOtherWalletAddress"
+        with mock.patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(PermissionError):
+                Engine(Config(live=True, symbol="SOLUSDC", state_dir=self.tmp.name))
+        self.assertTrue(keypair.address)
+
+    def test_live_mode_starts_with_key_and_matching_confirmation(self):
+        keypair = Keypair(bytes(range(32)))
+        env = {
+            "TRADEBOT_WALLET_KEY": base58.encode(bytes(range(32))),
+            "TRADEBOT_LIVE_CONFIRM": keypair.address,
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            engine = Engine(Config(live=True, symbol="SOLUSDC", state_dir=self.tmp.name))
+        self.assertEqual(engine.mode, "live (dry run)")   # dry_run defaults to true
+        self.assertEqual(engine.executor.base_mint, jupiter.KNOWN_MINTS["SOL"][0])
 
     def test_step_persists_and_is_idempotent_within_a_candle(self):
         engine = Engine(self.cfg, RecordingNotifier())

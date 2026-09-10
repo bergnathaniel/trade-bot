@@ -4,9 +4,10 @@ A paper-trading bot with a phone-sized dashboard. Pure Python 3.11 standard
 library — no pip install, no build step, so it runs anywhere you can get a
 shell (including Termux on Android or a $5 VPS you poke at from your phone).
 
-**It does not place real orders.** `live: true` raises `NotImplementedError`
-on purpose. What you get is a strategy, an honest backtester, a paper account
-that survives restarts, and a way to watch it from your phone.
+Two modes: **paper** (default, simulated fills) and **live** (real swaps on
+Solana through Jupiter, spending a real wallet). Live mode is off by default,
+dry-run by default when enabled, and wrapped in hard limits — read
+[Live trading](#live-trading-real-money) before you turn it on.
 
 ## Quick start
 
@@ -66,6 +67,8 @@ journalctl -u tradebot -f          # what it is deciding, live
 | `run` | paper-trades in a loop, logging to stdout |
 | `serve` | same loop plus the dashboard on `--port` |
 | `show` | prints the effective config with secrets redacted |
+| `wallet` | prints the burner wallet address and its on-chain balances |
+| `quote` | prices a swap through Jupiter, signing nothing |
 
 ## The strategy
 
@@ -98,6 +101,90 @@ few hundred bars you mostly see the toll. Before believing any parameter set:
 This is a tool for learning and paper testing, not financial advice, and
 nothing here is a plan for reliable income.
 
+## Live trading (real money)
+
+Live mode swaps SOL against USDC/USDT on Jupiter, signing with a local
+ed25519 key. Everything below is deliberate friction.
+
+**Use a burner wallet.** In Phantom, create a *new* account (Settings → Add
+Account), send it only what you are willing to lose, and export that account's
+key — never your main one. The bot holds the key in full: whatever that wallet
+can do, the bot can do.
+
+**The key goes in an environment file, never in the repo and never in CI.**
+
+```bash
+sudo install -m 600 /dev/null /etc/tradebot.env
+sudo tee -a /etc/tradebot.env >/dev/null <<'ENV'
+TRADEBOT_WALLET_KEY=<base58 key Phantom exported>
+ENV
+```
+
+GitHub Actions is not a place for this: workflow secrets are readable by
+anyone who can push a workflow file, and scheduled runs fire late and get
+skipped under load. Run it on a box you control.
+
+Then work up in steps, checking after each:
+
+```bash
+python3 -m tradebot wallet                       # address + balances; fund it, then re-run
+python3 -m tradebot quote --symbol SOLUSDC       # price a swap, signs nothing
+python3 -m tradebot --config config.json show    # confirm the limits
+```
+
+To go live, set `"symbol": "SOLUSDC"` and `"live": true` in the config, then:
+
+```bash
+export TRADEBOT_LIVE_CONFIRM=<the wallet address printed above>
+python3 -m tradebot --config config.json serve
+```
+
+`dry_run` is still `true` at that point: the bot quotes, builds, signs and
+simulates every trade against the chain, then refuses to broadcast and logs
+what it would have sent. Watch that for a while. Only then set
+`"dry_run": false`.
+
+### What stops a bad trade
+
+Every one of these refuses the trade outright — nothing is signed until all of
+them pass:
+
+| guard | default | what it does |
+| --- | --- | --- |
+| `TRADEBOT_LIVE_CONFIRM` | required | must equal the wallet address, so a stray `live: true` cannot spend the wrong wallet |
+| `dry_run` | `true` | signs and simulates, never broadcasts |
+| `max_trade_usd` | 25 | caps every single swap |
+| `daily_loss_limit_usd` | 50 | halts trading for the UTC day once realised losses hit it |
+| `max_trades_per_day` | 6 | caps churn |
+| `max_slippage_bps` | 100 | rejects a route whose worst case is worse than 1% |
+| `max_price_impact_pct` | 1.0 | rejects a thin route |
+| `min_sol_reserve` | 0.02 SOL | never spends the gas money |
+| mint allowlist | SOL/USDC/USDT | refuses any other token |
+| fee-payer check | always | refuses to sign a transaction whose fee payer is not this wallet |
+| simulation | always | a transaction that fails simulation is never broadcast |
+| `touch state/HALT` | — | kill switch: stops live trading without stopping the process |
+
+### Kill switch
+
+```bash
+touch /opt/trade-bot/state/HALT     # stop trading now; open position is left alone
+rm /opt/trade-bot/state/HALT        # resume
+```
+
+The kill switch does not sell. To exit a position, swap it back in Phantom.
+
+### What is and is not tested
+
+The full path — quote, build, parse, fee-payer check, sign, verify,
+re-serialise — is exercised against live Jupiter responses, and ed25519 is
+checked against the RFC 8032 vectors. **Broadcasting is not**: it needs a
+funded wallet. Run on devnet (`"rpc_url": "https://api.devnet.solana.com"`) or
+with `dry_run: true` and a tiny balance before trusting it with anything.
+
+And the standing caveat: this strategy underperformed buy-and-hold in every
+backtest here, on synthetic, BTC and ETH data. Live execution makes the losses
+real, not smaller.
+
 ## Configuration
 
 Every field in `config.example.json` can be overridden by an environment
@@ -120,11 +207,13 @@ account rather than crashing the bot.
 python3 -m unittest discover -s tests -v
 ```
 
-45 tests cover the indicators, the paper account's fee/slippage arithmetic,
+87 tests cover the indicators, the paper account's fee/slippage arithmetic,
 entry and exit conditions, backtest invariants (final equity equals starting
 cash plus realised PnL), state persistence and corruption recovery, and the
-dashboard's token check, plus data-source
-fallback, Coinbase row remapping and symbol mapping.
+dashboard's token check, data-source
+fallback and symbol mapping, base58 and ed25519 against the RFC 8032 vectors,
+transaction parsing and the refusal to sign for another wallet, and every
+trading guard (kill switch, caps, slippage, fee reserve, failed simulation).
 
 ## Market data
 

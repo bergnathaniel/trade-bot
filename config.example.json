@@ -17,8 +17,20 @@
   "slippage_rate": 0.0005,
 
   "live": false,
+  "dry_run": true,
   "poll_seconds": 60,
   "lookback": 500,
+
+  "rpc_url": "https://api.mainnet-beta.solana.com",
+  "wallet_key_env": "TRADEBOT_WALLET_KEY",
+  "max_trade_usd": 25.0,
+  "daily_loss_limit_usd": 50.0,
+  "max_trades_per_day": 6,
+  "max_slippage_bps": 100,
+  "max_price_impact_pct": 1.0,
+  "min_sol_reserve": 0.02,
+  "priority_fee_lamports": 100000,
+  "confirm_timeout": 90.0,
 
   "state_dir": "./state",
   "dashboard_port": 8000,

@@ -67,7 +67,9 @@ async function tick(){
     const r = await fetch('/api/state' + (q ? '?token=' + encodeURIComponent(q) : ''));
     if(!r.ok) throw new Error('HTTP ' + r.status);
     const s = await r.json();
-    document.getElementById('mode').textContent = s.mode;
+    const mode = document.getElementById('mode');
+    mode.textContent = s.mode;
+    mode.className = s.mode === 'LIVE' ? 'down' : '';
     document.getElementById('sym').textContent = s.symbol + ' · ' + s.interval;
     document.getElementById('equity').textContent = money(s.equity);
     const ret = document.getElementById('ret');
@@ -80,6 +82,10 @@ async function tick(){
       rows.push(['stop', money(s.position.stop)]);
       rows.push(['unrealised', money(s.position.unrealised)]);
     } else { rows.push(['position', 'flat']); }
+    if(s.ledger){
+      rows.push(['today', s.ledger.trades + ' trades · ' +
+        (s.ledger.realised_usd >= 0 ? '+' : '') + money(s.ledger.realised_usd)]);
+    }
     document.getElementById('stats').innerHTML = rows
       .map(([k, v]) => `<div class="row"><span>${k}</span><span>${v}</span></div>`).join('');
     document.getElementById('trades').innerHTML = s.trades.length ? s.trades.map(t => `<tr>

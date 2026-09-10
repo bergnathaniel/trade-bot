@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,8 +12,11 @@ from pathlib import Path
 from . import strategy
 from .config import Config
 from .data import DataError, load_candles
+from .execution import Executor, LiveExecutor, PaperExecutor
+from .guards import DailyLedger
 from .notify import Notifier
 from .portfolio import Portfolio
+from .solana.keypair import Keypair
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +28,7 @@ class State:
     last_price: float = 0.0
     last_checked: float = 0.0
     equity_curve: list[tuple[int, float]] = field(default_factory=list)
+    ledger: DailyLedger = field(default_factory=DailyLedger)
 
     def to_dict(self) -> dict:
         return {
@@ -32,6 +37,7 @@ class State:
             "last_price": self.last_price,
             "last_checked": self.last_checked,
             "equity_curve": self.equity_curve[-2000:],
+            "ledger": self.ledger.to_dict(),
         }
 
     @classmethod
@@ -42,18 +48,29 @@ class State:
             last_price=float(data.get("last_price", 0.0)),
             last_checked=float(data.get("last_checked", 0.0)),
             equity_curve=[tuple(p) for p in data.get("equity_curve", [])],
+            ledger=DailyLedger.from_dict(data.get("ledger")),
         )
 
 
 class Engine:
-    def __init__(self, cfg: Config, notifier: Notifier | None = None) -> None:
-        if cfg.live:
-            raise NotImplementedError(
-                "live trading is deliberately not implemented; run with live=false (paper)"
-            )
+    def __init__(self, cfg: Config, notifier: Notifier | None = None,
+                 executor: Executor | None = None) -> None:
         self.cfg = cfg
         self.notifier = notifier or Notifier(cfg.telegram_token, cfg.telegram_chat_id)
         self.state = self.load_state()
+        self.executor = executor or self._build_executor()
+
+    def _build_executor(self) -> Executor:
+        if not self.cfg.live:
+            return PaperExecutor(self.cfg, self.state.portfolio)
+        keypair = Keypair.from_env(self.cfg.wallet_key_env)
+        require_live_confirmation(keypair.address)
+        log.warning(
+            "LIVE MODE on %s: wallet %s, max %.2f USD per trade, daily loss limit %.2f USD%s",
+            self.cfg.symbol, keypair.address, self.cfg.max_trade_usd,
+            self.cfg.daily_loss_limit_usd, " (dry run)" if self.cfg.dry_run else "",
+        )
+        return LiveExecutor(self.cfg, self.state.portfolio, keypair, ledger=self.state.ledger)
 
     # -- persistence -----------------------------------------------------
     def load_state(self) -> State:
@@ -100,36 +117,36 @@ class Engine:
 
         ind = strategy.compute(closed, self.cfg)
         portfolio = self.state.portfolio
+        self.executor.refresh(price)
         if portfolio.position is not None:
             strategy.update_trailing_stop(portfolio.position, price, ind.atr[i], self.cfg)
 
         signal = strategy.decide(closed, ind, i, self.cfg, portfolio.position)
         status = f"{signal.action} ({signal.reason}) @ {price:.2f}"
         if signal.action == "buy":
-            qty = portfolio.size_for(price, self.cfg.risk_fraction)
-            trade = portfolio.buy(price, qty, closed[i].open_time, signal.reason)
+            trade = self.executor.buy(price, closed[i].open_time, signal.reason)
             if trade:
-                if signal.stop:
+                if signal.stop and portfolio.position is not None:
                     portfolio.position.stop = signal.stop
                 self.notifier.send(
                     f"BUY {self.cfg.symbol} {trade.qty:.6f} @ {trade.price:.2f} ({signal.reason})"
                 )
         elif signal.action == "sell":
-            trade = portfolio.sell(price, closed[i].open_time, signal.reason)
+            trade = self.executor.sell(price, closed[i].open_time, signal.reason)
             if trade:
                 self.notifier.send(
                     f"SELL {self.cfg.symbol} {trade.qty:.6f} @ {trade.price:.2f} "
                     f"({signal.reason}) pnl {trade.pnl:+.2f}"
                 )
 
-        self.state.equity_curve.append((closed[i].open_time, portfolio.equity(price)))
+        self.state.equity_curve.append((closed[i].open_time, self.executor.equity(price)))
         self.save_state()
-        log.info("%s | equity %.2f", status, portfolio.equity(price))
+        log.info("%s | equity %.2f", status, self.executor.equity(price))
         return status
 
     def run_forever(self) -> None:
-        log.info("paper trading %s %s every %ss", self.cfg.symbol, self.cfg.interval, self.cfg.poll_seconds)
-        self.notifier.send(f"trade-bot started (paper) on {self.cfg.symbol} {self.cfg.interval}")
+        log.info("%s %s %s every %ss", self.mode, self.cfg.symbol, self.cfg.interval, self.cfg.poll_seconds)
+        self.notifier.send(f"trade-bot started ({self.mode}) on {self.cfg.symbol} {self.cfg.interval}")
         while True:
             try:
                 self.step()
@@ -138,10 +155,16 @@ class Engine:
             time.sleep(max(5, self.cfg.poll_seconds))
 
     # -- read model for the dashboard ------------------------------------
+    @property
+    def mode(self) -> str:
+        if not self.cfg.live:
+            return "paper"
+        return "live (dry run)" if self.cfg.dry_run else "LIVE"
+
     def snapshot(self) -> dict:
         portfolio = self.state.portfolio
         price = self.state.last_price
-        equity = portfolio.equity(price)
+        equity = self.executor.equity(price)
         position = None
         if portfolio.position:
             p = portfolio.position
@@ -154,13 +177,14 @@ class Engine:
         return {
             "symbol": self.cfg.symbol,
             "interval": self.cfg.interval,
-            "mode": "paper",
+            "mode": self.mode,
             "price": price,
             "equity": equity,
             "cash": portfolio.cash,
             "return_pct": (equity / self.cfg.starting_cash - 1) * 100 if self.cfg.starting_cash else 0.0,
             "position": position,
             "last_checked": self.state.last_checked,
+            "ledger": self.state.ledger.to_dict(),
             "equity_curve": self.state.equity_curve[-200:],
             "trades": [
                 {
@@ -170,3 +194,13 @@ class Engine:
                 for t in portfolio.trades[-25:]
             ][::-1],
         }
+
+
+def require_live_confirmation(address: str, var: str = "TRADEBOT_LIVE_CONFIRM") -> None:
+    """Live mode needs the wallet address typed back, so it cannot start by accident."""
+    supplied = os.environ.get(var, "").strip()
+    if supplied != address:
+        raise PermissionError(
+            f"live mode refused: set {var} to the wallet address you intend to trade "
+            f"({address}). This exists so a stray live:true cannot spend the wrong wallet."
+        )

@@ -1,4 +1,4 @@
-"""Command line: `python -m tradebot <backtest|run|serve|fetch|show>`."""
+"""Command line: `python -m tradebot <backtest|run|serve|fetch|show|wallet|quote>`."""
 
 from __future__ import annotations
 
@@ -11,6 +11,9 @@ from . import backtest, server
 from .config import Config
 from .data import DataError, load_candles, read_csv, synthetic, write_csv
 from .engine import Engine
+from .solana.jupiter import JupiterError, KNOWN_MINTS
+from .solana.keypair import KeyError_
+from .solana.rpc import RpcError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,6 +47,13 @@ def build_parser() -> argparse.ArgumentParser:
     fetch.add_argument("--limit", type=int, default=1000)
 
     sub.add_parser("show", parents=[common], help="print the effective configuration")
+
+    sub.add_parser("wallet", parents=[common],
+                   help="print the burner wallet address and its on-chain balances")
+
+    quote = sub.add_parser("quote", parents=[common],
+                           help="price a swap through Jupiter without signing anything")
+    quote.add_argument("--usd", type=float, default=25.0, help="notional to price, in quote units")
     return parser
 
 
@@ -101,6 +111,41 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {len(candles)} candles to {args.out}")
         return 0
 
+    if args.command == "wallet":
+        from .solana.keypair import Keypair
+        from .solana.rpc import LAMPORTS_PER_SOL, RpcClient
+
+        keypair = Keypair.from_env(cfg.wallet_key_env)
+        client = RpcClient(cfg.rpc_url)
+        print(f"address: {keypair.address}")
+        print(f"explorer: https://solscan.io/account/{keypair.address}")
+        sol = client.get_balance(keypair.address) / LAMPORTS_PER_SOL
+        print(f"SOL: {sol:.6f}")
+        for name, (mint, _) in KNOWN_MINTS.items():
+            if name == "SOL":
+                continue
+            balance = client.get_token_balance(keypair.address, mint)
+            if balance:
+                print(f"{name}: {balance:.6f}")
+        print(f"\nto trade live, set TRADEBOT_LIVE_CONFIRM={keypair.address}")
+        return 0
+
+    if args.command == "quote":
+        from .execution import split_pair
+        from .solana import jupiter
+
+        base, quote_symbol = split_pair(cfg.symbol)
+        base_mint, base_decimals = KNOWN_MINTS[base]
+        quote_mint, quote_decimals = KNOWN_MINTS[quote_symbol]
+        amount = jupiter.to_base_units(args.usd, quote_decimals)
+        result = jupiter.get_quote(quote_mint, base_mint, amount, cfg.max_slippage_bps)
+        received = jupiter.from_base_units(result.out_amount, base_decimals)
+        worst = jupiter.from_base_units(result.min_out_amount, base_decimals)
+        print(f"{args.usd:g} {quote_symbol} -> {received:.6f} {base} "
+              f"(worst case {worst:.6f}, price impact {result.price_impact_pct}%)")
+        print(f"implied price: {args.usd / received:.4f} {quote_symbol}/{base}" if received else "")
+        return 0
+
     if args.command == "run":
         Engine(cfg).run_forever()
         return 0
@@ -115,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
 def entrypoint() -> int:
     try:
         return main()
-    except DataError as exc:
+    except (DataError, JupiterError, RpcError, KeyError_, PermissionError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
